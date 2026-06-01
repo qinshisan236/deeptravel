@@ -5352,57 +5352,56 @@ function obFinish(){
   ob.style.transition="opacity .4s"; ob.style.opacity="0";
   setTimeout(()=>ob.remove(),400);
 }
-/* ---- hardware / gesture Back → in-app navigation (Android back key, edge-swipe) ---- */
+/* ---- hardware / gesture Back → in-app navigation (Android back key, edge-swipe) ----
+   不变量：除非用户在「探索」根页明确二次确认，否则返回键永远不会直接退出网页。
+   任何一级（浮层 / 登录 / 引导 / 压入页 / 非首页 tab）都先消费返回键并补回守卫记录，
+   只有「探索 + 无压入页」时第一次按 → 弹"再按一次"，第二次按 → 退出。 */
 (function(){
-  var _armed=false,_armTimer=null,_leaving=false;
-  function _guard(){try{history.pushState({dt:'app'},'');}catch(e){}}
-  // On page show (e.g. user navigates back to this page), reset leaving flag
-  window.addEventListener('pageshow',function(){_leaving=false;_armed=false;if(_armTimer)clearTimeout(_armTimer);});
-  try{history.replaceState({dt:'root'},'');_guard();}catch(e){}
+  var _armed=false,_armTimer=null;
+  function _guard(){ try{ history.pushState({dt:'app'},''); }catch(e){} }
+  function _disarm(){ _armed=false; if(_armTimer){ clearTimeout(_armTimer); _armTimer=null; } }
+  function _closeTopOverlay(){
+    var all=[...document.querySelectorAll('.sheet-mask.show,.qr-mask.show,.call-overlay.show,.photo-viewer.show,.social-auth.show')];
+    if(!all.length) return false;
+    var m=all[all.length-1];
+    m.classList.remove('show');
+    setTimeout(function(){ if(m&&m.parentNode) m.remove(); },300);
+    return true;
+  }
+  // 初始化：哨兵 + 一个守卫，确保"第一次"返回键就能被接住，而不会直接退出
+  try{ history.replaceState({dt:'root'},''); _guard(); }catch(e){}
+  window.addEventListener('pageshow', _disarm);
 
-  window.addEventListener('popstate',function(){
-    if(_leaving) return;
-
-    // 1. Sheet / bottom-sheet / QR overlay
-    var ms=[...document.querySelectorAll('.sheet-mask.show,.qr-mask.show')];
-    if(ms.length){
-      var m=ms[ms.length-1];
-      if(m.id)closeSheet(m.id);else{m.classList.remove('show');setTimeout(function(){m.remove();},300);}
-      _guard();return;
+  window.addEventListener('popstate', function(){
+    // 1. 任意浮层（操作面板 / 二维码 / 通话 / 大图 / 第三方登录）→ 关闭最上层
+    if(document.querySelector('.sheet-mask.show,.qr-mask.show,.call-overlay.show,.photo-viewer.show,.social-auth.show')){
+      _disarm(); _closeTopOverlay(); _guard(); return;
     }
-
-    // 2. Login overlay
+    // 2. 登录浮层
     var lg=document.querySelector('#ob-login.show');
-    if(lg){lg.classList.remove('show');_guard();return;}
-
-    // 3. Onboarding: back = previous slide; on first slide = exit onboarding
+    if(lg){ _disarm(); lg.classList.remove('show'); _guard(); return; }
+    // 3. 引导页：返回 = 上一张；首张则关闭引导
     if(document.getElementById('onboarding')){
-      if(typeof _ob!=='undefined'&&_ob.i>0) obPrev();
-      else obFinish();
-      _guard();return;
+      _disarm();
+      if(typeof _ob!=='undefined' && _ob.i>0) obPrev(); else obFinish();
+      _guard(); return;
     }
-
-    // 4. Pushed screen (detail / sub-page)
-    if(state.navStack&&state.navStack.length){popScreen();_guard();return;}
-
-    // 5. Non-home tab → return to home tab (探索) first
-    if(state.tab&&state.tab!=='home'){
-      if(_armed){clearTimeout(_armTimer);_armed=false;}
-      switchTab('home');_guard();return;
-    }
-
-    // 6. Home tab, no screens: 再按一次 → exit
+    // 4. 压入的详情 / 子页 → 逐级弹出
+    if(state.navStack && state.navStack.length){ _disarm(); popScreen(); _guard(); return; }
+    // 5. 非首页 tab（社区 / 消息 / 我的）→ 一律先回到「探索」
+    if(state.tab && state.tab!=='home'){ _disarm(); switchTab('home'); _guard(); return; }
+    // 6. 「探索」根页，无压入页 → 第一次：再按一次；第二次：退出
     if(_armed){
-      clearTimeout(_armTimer);_armed=false;
-      _leaving=true;
-      // Do NOT push guard → next hardware-back lets browser exit naturally
-      if(typeof toast==='function') toast('正在退出…','ti-logout');
+      _disarm();
+      // 已二次确认退出：刚刚那一下返回已消费守卫(现停在哨兵)，再回退一步离开页面。
+      // 若无更早的历史（应用是首个页面），补回守卫，保证应用仍可用且返回键依旧有"再按一次"保护。
+      try{ history.back(); }catch(e){}
+      setTimeout(function(){ _guard(); }, 260);
       return;
     }
-    _armed=true;
-    _guard(); // push guard so the second press also fires popstate
+    _armed=true; _guard();
     if(typeof toast==='function') toast('再按一次返回键退出','ti-logout');
-    _armTimer=setTimeout(function(){_armed=false;},2000);
+    _armTimer=setTimeout(_disarm, 2000);
   });
 })();
 showOnboarding();
